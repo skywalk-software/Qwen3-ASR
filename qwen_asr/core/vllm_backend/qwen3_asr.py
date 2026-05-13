@@ -1035,8 +1035,15 @@ class Qwen3ASRForConditionalGeneration(
                 f"Unsupported task_type '{task_type}'. "
                 "Supported task types are 'transcribe' and 'translate'."
             )
-        full_lang_name_to = cls.supported_languages.get(to_language, to_language)
-        if to_language is None:
+        # For transcription, use `language`; for translation, use `to_language`.
+        # Putting "language X<asr_text>" at the end of the prompt makes the model
+        # generate only the transcript text — without this, each chunk's per-prompt
+        # output re-emits the language directive itself, and when vLLM concatenates
+        # chunk outputs (audio > max_audio_clip_s) you get the directive in the
+        # middle of the final response.
+        effective_lang = to_language if task_type == "translate" else language
+        full_lang_name_to = cls.supported_languages.get(effective_lang, effective_lang)
+        if effective_lang is None:
             prompt = (
                 f"<|im_start|>user\n{audio_placeholder}<|im_end|>\n"
                 f"<|im_start|>assistant\n"
