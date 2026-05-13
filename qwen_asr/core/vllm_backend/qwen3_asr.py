@@ -990,8 +990,19 @@ class Qwen3ASRForConditionalGeneration(
     ) -> SpeechToTextConfig:
         processor = cached_processor_from_config(model_config)
         feature_extractor: WhisperFeatureExtractor = processor.feature_extractor
+        # max_audio_clip_s: qwen_asr.inference.utils.MAX_ASR_INPUT_SECONDS is 1200
+        # (20 min) — that's what Qwen3ASRModel.transcribe uses for non-aligned ASR.
+        # Defaulting to feature_extractor.chunk_length (30s) is artificially aggressive:
+        # vLLM's OpenAI speech-to-text path then splits anything > 30s into 30s clips
+        # and transcribes each independently. On long audio with silent regions, each
+        # silent chunk hallucinates the same sentence and the chunks get concatenated
+        # into a repetitive response. The mel feature extractor handles arbitrary
+        # length when called with padding=True, truncation=False (which the upstream
+        # Qwen3OmniMoeThinkerMultiModalProcessor does), and the audio encoder applies
+        # its own n_window-based chunking internally.
+        from qwen_asr.inference.utils import MAX_ASR_INPUT_SECONDS
         return SpeechToTextConfig(
-            max_audio_clip_s=feature_extractor.chunk_length,
+            max_audio_clip_s=MAX_ASR_INPUT_SECONDS,
             sample_rate=feature_extractor.sampling_rate,
         )
 
