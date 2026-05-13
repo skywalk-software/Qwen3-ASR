@@ -125,6 +125,11 @@ except:
 
 logger = init_logger(__name__)
 
+# Maximum audio duration (s) per request before vLLM's speech-to-text router
+# splits the input. Sized for tight deployments; bump if your GPU has headroom.
+MAX_AUDIO_CLIP_S = 300
+
+
 
 def _get_feat_extract_output_lengths(input_lengths: torch.Tensor):
     input_lengths_leave = input_lengths % 100
@@ -607,18 +612,13 @@ class Qwen3ASRDummyInputsBuilder(BaseDummyInputsBuilder[Qwen3ASRProcessingInfo])
 
         feature_extractor = self.info.get_feature_extractor()
 
-        # Size the dummy at MAX_ASR_INPUT_SECONDS (1200s) — vLLM uses this dummy
-        # to compute the encoder-cache budget at startup. The upstream default
-        # of 30s caps long-audio requests at ~390 audio tokens, but Qwen3-ASR
-        # natively handles up to 1200s. Keep these in sync with the
-        # max_audio_clip_s value in get_speech_to_text_config.
-        target_audio_length = (
-            min(
-                feature_extractor.chunk_length * 40,  # 30s * 40 = 1200s
-                1200,
-            )
-            * feature_extractor.sampling_rate
-        )
+        # Size the dummy to match max_audio_clip_s. The upstream default of 30s
+        # caps long-audio requests at ~390 audio tokens; Qwen3-ASR natively handles
+        # up to 1200s but the encoder's peak-activation memory at 1200s overflows
+        # tight deployments (e.g. 16GB T4 sharing with tfgridnet). Use
+        # MAX_AUDIO_CLIP_S (see get_speech_to_text_config) as the budget; tune to
+        # fit memory.
+        target_audio_length = MAX_AUDIO_CLIP_S * feature_extractor.sampling_rate
 
         audio_overrides = mm_options.get("audio") if mm_options else None
 
@@ -1005,11 +1005,13 @@ class Qwen3ASRForConditionalGeneration(
         # length when called with padding=True, truncation=False (which the upstream
         # Qwen3OmniMoeThinkerMultiModalProcessor does), and the audio encoder applies
         # its own n_window-based chunking internally.
-        # 1200s = qwen_asr.inference.utils.MAX_ASR_INPUT_SECONDS (avoid the import
-        # since qwen_asr.inference pulls librosa/nagisa, which slim vLLM-serving
-        # environments don't install).
+        # qwen_asr.inference.utils.MAX_ASR_INPUT_SECONDS is 1200s but the encoder's
+        # peak-activation memory at that length overflows tight deployments
+        # (e.g. 16GB T4 sharing with tfgridnet). Use MAX_AUDIO_CLIP_S — tune to
+        # the deployment. 300s is a comfortable default that still avoids the
+        # repetition-on-silence pathology that the 30s upstream default caused.
         return SpeechToTextConfig(
-            max_audio_clip_s=1200,
+            max_audio_clip_s=MAX_AUDIO_CLIP_S,
             sample_rate=feature_extractor.sampling_rate,
         )
 
