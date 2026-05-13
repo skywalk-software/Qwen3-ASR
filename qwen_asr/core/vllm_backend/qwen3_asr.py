@@ -1000,9 +1000,11 @@ class Qwen3ASRForConditionalGeneration(
         # length when called with padding=True, truncation=False (which the upstream
         # Qwen3OmniMoeThinkerMultiModalProcessor does), and the audio encoder applies
         # its own n_window-based chunking internally.
-        from qwen_asr.inference.utils import MAX_ASR_INPUT_SECONDS
+        # 1200s = qwen_asr.inference.utils.MAX_ASR_INPUT_SECONDS (avoid the import
+        # since qwen_asr.inference pulls librosa/nagisa, which slim vLLM-serving
+        # environments don't install).
         return SpeechToTextConfig(
-            max_audio_clip_s=MAX_ASR_INPUT_SECONDS,
+            max_audio_clip_s=1200,
             sample_rate=feature_extractor.sampling_rate,
         )
 
