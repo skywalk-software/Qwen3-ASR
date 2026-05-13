@@ -33,6 +33,9 @@ dependencies = [
   "pytz",
 ]
 
+[project.entry-points."vllm.general_plugins"]
+qwen_asr = "qwen_asr.core.vllm_backend:register"
+
 [project.optional-dependencies]
 vllm = [
   "vllm==0.14.0",
