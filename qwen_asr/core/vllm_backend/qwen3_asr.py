@@ -469,9 +469,19 @@ class Qwen3ASRAudioEncoder(nn.Module):
             cu_chunk_lens.extend([window_aftercnn] * num_full_chunks)
             if remainder:
                 cu_chunk_lens.append(remainder)
-        cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(
-            -1, dtype=torch.int32
-        )
+        # NOTE: the chunked cu_seqlens computed above is intentionally NOT used as
+        # the attention boundary. The transformers Qwen3-ASR encoder also computes
+        # cu_seqlens but its default SDPA path passes attention_mask=None to
+        # F.scaled_dot_product_attention — only the FA2 backend honors cu_seqlens.
+        # Since the model was trained/evaluated through the SDPA path, it expects
+        # full attention WITHIN each audio (and no cross-audio leakage across a
+        # batch). Block-diagonal attention by the 800-frame window degrades quality
+        # significantly (e.g. drops 'LinkedIn post' to 'this thing' on long-tail
+        # audio). Override to one span per audio.
+        cu_seqlens = torch.cat([
+            torch.zeros(1, device=aftercnn_lens.device, dtype=torch.int32),
+            aftercnn_lens.to(torch.int32).cumsum(0),
+        ])
 
         max_seqlen = self.compute_attn_mask_seqlen(cu_seqlens)
 
