@@ -127,7 +127,7 @@ logger = init_logger(__name__)
 
 # Maximum audio duration (s) per request before vLLM's speech-to-text router
 # splits the input. Sized for tight deployments; bump if your GPU has headroom.
-MAX_AUDIO_CLIP_S = 240
+MAX_AUDIO_CLIP_S = 180
 
 
 
