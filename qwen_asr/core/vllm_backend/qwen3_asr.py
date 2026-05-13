@@ -35,7 +35,11 @@ from transformers.models.whisper import WhisperFeatureExtractor
 from vllm.config import MultiModalConfig, ModelConfig, SpeechToTextConfig, VllmConfig
 from vllm.config.multimodal import BaseDummyOptions
 from vllm.distributed import get_tensor_model_parallel_world_size
-from vllm.inputs.data import PromptType
+try:
+    from vllm.inputs.data import PromptType
+except ImportError:
+    from vllm.inputs import PromptType  # vLLM >= 0.19
+
 from vllm.logger import init_logger
 from vllm.model_executor.layers.activation import _ACTIVATION_REGISTRY
 from vllm.model_executor.layers.attention.mm_encoder_attention import (
@@ -68,14 +72,24 @@ from vllm.model_executor.models.utils import (
 )
 from vllm.model_executor.models.whisper import ISO639_1_SUPPORTED_LANGS
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import (
-    AudioItem,
-    ModalityData,
-    MultiModalDataDict,
-    MultiModalFeatureSpec,
-    MultiModalFieldConfig,
-    MultiModalKwargsItems,
-)
+try:
+    from vllm.multimodal.inputs import (
+        AudioItem,
+        ModalityData,
+        MultiModalDataDict,
+        MultiModalFeatureSpec,
+        MultiModalFieldConfig,
+        MultiModalKwargsItems,
+    )
+except ImportError:
+    # vLLM >= 0.19: ModalityData / MultiModalDataDict moved to vllm.inputs.
+    from vllm.inputs import ModalityData, MultiModalDataDict
+    from vllm.multimodal.inputs import (
+        AudioItem,
+        MultiModalFeatureSpec,
+        MultiModalFieldConfig,
+        MultiModalKwargsItems,
+    )
 from vllm.multimodal.parse import (
     AudioProcessorItems,
     DictEmbeddingItems,
@@ -194,12 +208,18 @@ class Qwen3ASRAudioAttention(nn.Module):
             prefix=f"{prefix}.out_proj",
         )
 
-        self.attn = MMEncoderAttention(
+        # vLLM 0.19 dropped the multimodal_config kwarg from MMEncoderAttention.
+        # Newer/older signatures both accept the positional set below; pass
+        # multimodal_config when available for forward-compat.
+        _mm_attn_kwargs = dict(
             num_heads=self.num_local_heads,
             head_size=self.head_dim,
             scale=self.scaling,
-            multimodal_config=multimodal_config,
         )
+        import inspect as _inspect
+        if "multimodal_config" in _inspect.signature(MMEncoderAttention.__init__).parameters:
+            _mm_attn_kwargs["multimodal_config"] = multimodal_config
+        self.attn = MMEncoderAttention(**_mm_attn_kwargs)
 
     def forward(
         self,
@@ -358,17 +378,21 @@ class Qwen3ASRAudioEncoder(nn.Module):
         self.act = _ACTIVATION_REGISTRY[config.activation_function]
         self.proj2 = nn.Linear(config.d_model, config.output_dim)
 
-        # Get attention backend
-        attn_backend_override = (
-            multimodal_config.mm_encoder_attn_backend
-            if multimodal_config is not None
-            else None
-        )
-        self.attn_backend = get_vit_attn_backend(
+        # Get attention backend. vLLM 0.19 dropped the attn_backend_override kwarg
+        # (the override now flows via the current vllm_config context inside
+        # get_vit_attn_backend itself). Pass it only if the signature accepts it.
+        _vit_kwargs = dict(
             head_size=config.d_model // config.encoder_attention_heads,
             dtype=torch.get_default_dtype(),
-            attn_backend_override=attn_backend_override,
         )
+        import inspect as _inspect
+        if "attn_backend_override" in _inspect.signature(get_vit_attn_backend).parameters:
+            _vit_kwargs["attn_backend_override"] = (
+                multimodal_config.mm_encoder_attn_backend
+                if multimodal_config is not None
+                else None
+            )
+        self.attn_backend = get_vit_attn_backend(**_vit_kwargs)
 
     def compute_attn_mask_seqlen(self, cu_seqlens: torch.Tensor) -> torch.Tensor | None:
         """Compute max_seqlen only for flash attention backends."""
@@ -830,12 +854,16 @@ class Qwen3ASRForConditionalGeneration(
         is_multimodal: torch.Tensor | None = None,
         handle_oov_mm_token: bool = False,
     ) -> torch.Tensor:
-        inputs_embeds = self._embed_text_input_ids(
-            input_ids,
-            self.language_model.embed_input_ids,
+        # vLLM 0.19 dropped handle_oov_mm_token from SupportsMultiModal._embed_text_input_ids.
+        import inspect as _inspect
+        _embed_kwargs = dict(
+            input_ids=input_ids,
+            embed_input_ids=self.language_model.embed_input_ids,
             is_multimodal=is_multimodal,
-            handle_oov_mm_token=handle_oov_mm_token,
         )
+        if "handle_oov_mm_token" in _inspect.signature(self._embed_text_input_ids).parameters:
+            _embed_kwargs["handle_oov_mm_token"] = handle_oov_mm_token
+        inputs_embeds = self._embed_text_input_ids(**_embed_kwargs)
 
         if multimodal_embeddings is None or len(multimodal_embeddings) == 0:
             return inputs_embeds
