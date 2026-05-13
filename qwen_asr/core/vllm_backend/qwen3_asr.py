@@ -607,10 +607,15 @@ class Qwen3ASRDummyInputsBuilder(BaseDummyInputsBuilder[Qwen3ASRProcessingInfo])
 
         feature_extractor = self.info.get_feature_extractor()
 
+        # Size the dummy at MAX_ASR_INPUT_SECONDS (1200s) — vLLM uses this dummy
+        # to compute the encoder-cache budget at startup. The upstream default
+        # of 30s caps long-audio requests at ~390 audio tokens, but Qwen3-ASR
+        # natively handles up to 1200s. Keep these in sync with the
+        # max_audio_clip_s value in get_speech_to_text_config.
         target_audio_length = (
             min(
-                feature_extractor.chunk_length,
-                30,
+                feature_extractor.chunk_length * 40,  # 30s * 40 = 1200s
+                1200,
             )
             * feature_extractor.sampling_rate
         )
