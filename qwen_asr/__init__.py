@@ -15,11 +15,24 @@
 # limitations under the License.
 """
 qwen_asr: Qwen3-ASR package.
+
+Top-level lazy imports: the inference module pulls in heavy deps (nagisa,
+librosa, soundfile, sox, ...) that are not needed for the vLLM-backend
+plugin path. Importing `qwen_asr` should therefore not eagerly import them;
+they are only loaded when an inference symbol is actually accessed.
 """
 
-from .inference.qwen3_asr import Qwen3ASRModel
-from .inference.qwen3_forced_aligner import Qwen3ForcedAligner
+__all__ = ["Qwen3ASRModel", "Qwen3ForcedAligner", "parse_asr_output", "__version__"]
 
-from .inference.utils import parse_asr_output
 
-__all__ = ["__version__"]
+def __getattr__(name):
+    if name == "Qwen3ASRModel":
+        from .inference.qwen3_asr import Qwen3ASRModel
+        return Qwen3ASRModel
+    if name == "Qwen3ForcedAligner":
+        from .inference.qwen3_forced_aligner import Qwen3ForcedAligner
+        return Qwen3ForcedAligner
+    if name == "parse_asr_output":
+        from .inference.utils import parse_asr_output
+        return parse_asr_output
+    raise AttributeError(f"module 'qwen_asr' has no attribute {name!r}")
