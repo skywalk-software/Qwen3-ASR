@@ -1015,6 +1015,22 @@ class Qwen3ASRForConditionalGeneration(
             sample_rate=feature_extractor.sampling_rate,
         )
 
+    # Patterns the model emits at the start of every chunk output:
+    #   `language English<asr_text>` (when language detected)
+    #   `language None<asr_text>` (no-speech)
+    #   `<style=whisper>` / `<style=loud>` / etc.
+    # When vLLM splits long audio into chunks and concatenates per-chunk outputs,
+    # these would appear in the middle of the final response. Strip them per-chunk
+    # so the joined text is clean.
+    _ASR_TAG_RE = __import__("re").compile(
+        r"^\s*language\s+[A-Za-z]+\s*<asr_text>|<style=[^>]*>"
+    )
+
+    @classmethod
+    def post_process_output(cls, text: str) -> str:
+        """Strip Qwen3-ASR control tags from per-chunk decoded text."""
+        return cls._ASR_TAG_RE.sub("", text).strip()
+
     @classmethod
     def get_generation_prompt(
         cls,
@@ -1035,15 +1051,14 @@ class Qwen3ASRForConditionalGeneration(
                 f"Unsupported task_type '{task_type}'. "
                 "Supported task types are 'transcribe' and 'translate'."
             )
-        # For transcription, use `language`; for translation, use `to_language`.
-        # Putting "language X<asr_text>" at the end of the prompt makes the model
-        # generate only the transcript text — without this, each chunk's per-prompt
-        # output re-emits the language directive itself, and when vLLM concatenates
-        # chunk outputs (audio > max_audio_clip_s) you get the directive in the
-        # middle of the final response.
-        effective_lang = to_language if task_type == "translate" else language
-        full_lang_name_to = cls.supported_languages.get(effective_lang, effective_lang)
-        if effective_lang is None:
+        # NOTE: we no longer bake `language X<asr_text>` into the transcribe prompt.
+        # The model auto-detects language and emits the directive itself; we strip
+        # it from per-chunk outputs in post_process_output (below), so concatenated
+        # multi-chunk responses don't have the directive in the middle. The OpenAI
+        # `language` request param therefore acts as an unenforced hint; pass None
+        # to let the model auto-detect.
+        full_lang_name_to = cls.supported_languages.get(to_language, to_language)
+        if to_language is None:
             prompt = (
                 f"<|im_start|>user\n{audio_placeholder}<|im_end|>\n"
                 f"<|im_start|>assistant\n"
