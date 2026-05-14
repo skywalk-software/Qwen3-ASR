@@ -1051,14 +1051,18 @@ class Qwen3ASRForConditionalGeneration(
                 f"Unsupported task_type '{task_type}'. "
                 "Supported task types are 'transcribe' and 'translate'."
             )
-        # NOTE: we no longer bake `language X<asr_text>` into the transcribe prompt.
-        # The model auto-detects language and emits the directive itself; we strip
-        # it from per-chunk outputs in post_process_output (below), so concatenated
-        # multi-chunk responses don't have the directive in the middle. The OpenAI
-        # `language` request param therefore acts as an unenforced hint; pass None
-        # to let the model auto-detect.
-        full_lang_name_to = cls.supported_languages.get(to_language, to_language)
-        if to_language is None:
+        # Caller-supplied language tag (OpenAI Whisper-compatible API param) is
+        # OPTIONAL. When supplied, bake `language <FullName><asr_text>` into the
+        # prompt — the model was trained on those literal full English names
+        # (per ISO639_1_SUPPORTED_LANGS: 'en' -> 'English', 'zh' -> 'Chinese', ...).
+        # When NOT supplied, leave the prompt at `<|im_start|>assistant\n` and let
+        # the model auto-detect; the directive it then emits gets stripped per-chunk
+        # in post_process_output so multi-chunk responses don't have it in the
+        # middle of the final concatenated text.
+        # For translation, `to_language` is set; for transcription, use `language`.
+        effective_lang = to_language if task_type == "translate" else language
+        full_lang_name_to = cls.supported_languages.get(effective_lang, effective_lang)
+        if effective_lang is None:
             prompt = (
                 f"<|im_start|>user\n{audio_placeholder}<|im_end|>\n"
                 f"<|im_start|>assistant\n"
