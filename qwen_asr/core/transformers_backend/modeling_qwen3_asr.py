@@ -724,11 +724,19 @@ class Qwen3ASRAudioEncoder(Qwen3ASRPreTrainedModel):
             if remainder != 0:
                 cu_chunk_lens += [remainder]
         cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
+        # Upstream PR #103 fix: build a block-diagonal 4D attention mask for
+        # non-FA2 backends (SDPA/eager).  Without this, SDPA/eager ignore
+        # cu_seqlens and perform full global self-attention, which severely
+        # degrades transcription quality (~340 vs ~555 words on a 5min clip).
+        # _prepare_attention_mask returns None for flash_attention_2 so the
+        # FA2 path is unchanged.
+        attention_mask = self._prepare_attention_mask(hidden_states, cu_seqlens)
 
         for encoder_layer in self.layers:
             layer_outputs = encoder_layer(
                 hidden_states,
                 cu_seqlens,
+                attention_mask=attention_mask,
             )
 
             hidden_states = layer_outputs[0]
